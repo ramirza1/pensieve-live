@@ -1,0 +1,11 @@
+﻿paths:
+  chroma_dir: "data/_server/chroma_db"
+
+retrieval:
+  top_k: 8
+
+app:
+  github_url: "https://github.com/ramirza1/pensieve"
+  query_snippet_model: "gpt-4.1-mini"
+
+embedding_model: "text-embedding-3-small"
