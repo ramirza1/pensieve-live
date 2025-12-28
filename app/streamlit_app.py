@@ -16,23 +16,16 @@ import chromadb
 # ---------- B2 Download Helper ----------
 @st.cache_resource(show_spinner=False)
 def ensure_chroma_db_from_b2() -> Path:
-    """
-    Download ChromaDB from Backblaze B2 if not present locally.
-    Called once on app startup, cached for the session.
-    """
     repo = Path(__file__).resolve().parent.parent
     chroma_dir = repo / "data" / "_server" / "chroma_db"
     marker_file = chroma_dir / ".b2_downloaded"
-    
-    # If marker exists, DB was already downloaded this deployment
-    if marker_file.exists() and any(chroma_dir.glob("*/")):
+
+    # Use existing DB if present
+    if marker_file.exists() and chroma_dir.exists() and any(chroma_dir.iterdir()):
         return chroma_dir
-    
-    # Check for local DB (for local development)
-    if chroma_dir.exists() and any(chroma_dir.glob("*/")):
-        # Local DB exists, use it
+    if chroma_dir.exists() and any(chroma_dir.iterdir()):
         return chroma_dir
-    
+
     # Get B2 credentials from Streamlit secrets
     try:
         b2_key_id = st.secrets["B2_KEY_ID"]
@@ -42,51 +35,51 @@ def ensure_chroma_db_from_b2() -> Path:
         st.error(f"B2 credentials not configured: {e}")
         st.info("For local development, ensure data/_server/chroma_db/ exists with your indexed data.")
         st.stop()
-    
-    # Show download progress
+
     progress_placeholder = st.empty()
     progress_placeholder.info("🧠 Loading Pensieve database (first load takes ~30-60 seconds)...")
-    
+
     try:
         from b2sdk.v2 import B2Api, InMemoryAccountInfo
-        
+
         info = InMemoryAccountInfo()
         b2_api = B2Api(info)
         b2_api.authorize_account("production", b2_key_id, b2_app_key)
-        
+
         bucket = b2_api.get_bucket_by_name(b2_bucket)
-        
+
         # Clear and recreate chroma dir
         if chroma_dir.exists():
             shutil.rmtree(chroma_dir)
         chroma_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Download all files
+
         file_count = 0
         for file_version, _ in bucket.ls(folder_to_list="chroma_db/", recursive=True):
             file_name = file_version.file_name
-            # Remove "chroma_db/" prefix
             if not file_name.startswith("chroma_db/"):
                 continue
             local_rel = file_name[len("chroma_db/"):]
             if not local_rel:
                 continue
+
             local_path = chroma_dir / local_rel
             local_path.parent.mkdir(parents=True, exist_ok=True)
-            
             bucket.download_file_by_name(file_name).save_to(str(local_path))
             file_count += 1
-        
-        # Create marker
+
+        # Sanity check after download
+        if not chroma_dir.exists() or not any(chroma_dir.iterdir()):
+            progress_placeholder.error(f"Chroma dir is empty after download: {chroma_dir}")
+            st.stop()
+
         marker_file.touch()
         progress_placeholder.success(f"✅ Database loaded ({file_count} files)")
-        
+
     except Exception as e:
         progress_placeholder.error(f"Failed to download database: {e}")
         st.stop()
-    
-    return chroma_dir
 
+    return chroma_dir
 
 # ---------- Config helpers ----------
 def load_config() -> dict:
@@ -564,6 +557,7 @@ def main():
         st.stop()
 
     cfg = load_config()
+    allow_debug = bool((cfg.get("app", {}) or {}).get("allow_debug", False))
     repo = Path(__file__).resolve().parent.parent
 
     # ===== Fetch DB from B2 if needed =====
@@ -610,7 +604,12 @@ def main():
                     _persist_theme_to_query_params(st.session_state.theme_mode)
                     st.rerun()
             with c2:
-                debug = st.toggle("🐛", key="toggle_debug", value=False, help="Debug mode")
+                if allow_debug:
+                    debug = st.toggle("🐛", key="toggle_debug", value=False, help="Debug mode")
+                else:
+                    debug = False
+                    # Keep layout stable when debug is hidden
+                    st.markdown("<div style='height: 2.2rem;'></div>", unsafe_allow_html=True)
 
         st.markdown(
             """
