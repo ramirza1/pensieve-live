@@ -582,7 +582,7 @@ def main():
         st.stop()
 
     cfg = load_config()
-    allow_debug = bool((cfg.get("app", {}) or {}).get("allow_debug", False))
+#    allow_debug = bool((cfg.get("app", {}) or {}).get("allow_debug", False))
     repo = Path(__file__).resolve().parent.parent
 
     # ===== Fetch DB from B2 if needed =====
@@ -622,19 +622,20 @@ def main():
                 unsafe_allow_html=True,
             )
         with toggles:
-            c1, c2 = st.columns([1, 1], vertical_alignment="center")
+#            c1, c2 = st.columns([1, 1], vertical_alignment="center") # Switch "comment out" to label below
+            c1 = st.container()
             with c1:
                 if st.button("🌗", key="btn_theme", help="Toggle light/dark", use_container_width=True):
                     st.session_state.theme_mode = "light" if st.session_state.theme_mode == "dark" else "dark"
                     _persist_theme_to_query_params(st.session_state.theme_mode)
                     st.rerun()
-            with c2:
-                if allow_debug:
-                    debug = st.toggle("🐛", key="toggle_debug", value=False, help="Debug mode")
-                else:
-                    debug = False
-                    # Keep layout stable when debug is hidden
-                    st.markdown("<div style='height: 2.2rem;'></div>", unsafe_allow_html=True)
+#            with c2:
+#                if allow_debug:
+#                    debug = st.toggle("🐛", key="toggle_debug", value=False, help="Debug mode")
+#                else:
+#                    debug = False
+#                    # Keep layout stable when debug is hidden
+#                    st.markdown("<div style='height: 2.2rem;'></div>", unsafe_allow_html=True)
 
         st.markdown(
             """
@@ -694,8 +695,8 @@ def main():
             help="Generate query-focused insights per result",
         )
 
-    if debug:
-        st.caption(f"debug: chroma_dir={chroma_dir}")
+#    if debug:
+#        st.caption(f"debug: chroma_dir={chroma_dir}")
 
     # ---------- QUERY ----------
     if q:
@@ -715,7 +716,7 @@ def main():
                 query=q,
                 ai_model=ai_model,
                 summaries=note_sum_map,
-                debug=debug,
+#                debug=debug,
                 enable_ai_snippets=enable_ai_snippets,
             )
 
@@ -736,7 +737,7 @@ def main():
                     query=q,
                     ai_model=ai_model,
                     summaries=paper_sum_map,
-                    debug=debug,
+#                    debug=debug,
                     enable_ai_snippets=enable_ai_snippets,
                 )
 
