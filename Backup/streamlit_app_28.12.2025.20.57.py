@@ -1,13 +1,9 @@
 from __future__ import annotations
 
 import os
-import re
-import math
 import hashlib
 import shutil
 from pathlib import Path
-from collections import Counter
-from dataclasses import dataclass
 import yaml
 import streamlit as st
 
@@ -17,10 +13,7 @@ from PIL import Image
 import chromadb
 
 
-# ============================================================================
-# B2 DOWNLOAD HELPER
-# ============================================================================
-
+# ---------- B2 Download Helper ----------
 @st.cache_resource(show_spinner=False)
 def ensure_chroma_db_from_b2() -> Path:
     """
@@ -114,291 +107,7 @@ def ensure_chroma_db_from_b2() -> Path:
     return chroma_dir
 
 
-# ============================================================================
-# HYBRID SEARCH MODULE
-# ============================================================================
-
-class BM25:
-    """
-    BM25 (Best Matching 25) - industry-standard keyword matching algorithm.
-    Used to boost results that contain exact query terms.
-    """
-    
-    def __init__(
-        self,
-        documents: list[str],
-        k1: float = 1.5,
-        b: float = 0.75,
-    ):
-        self.k1 = k1
-        self.b = b
-        
-        # Tokenize all documents
-        self.doc_tokens = [self._tokenize(doc) for doc in documents]
-        self.doc_lengths = [len(tokens) for tokens in self.doc_tokens]
-        self.avg_doc_length = sum(self.doc_lengths) / len(self.doc_lengths) if self.doc_lengths else 1
-        self.n_docs = len(documents)
-        
-        # Build term frequency index
-        self.doc_freqs: dict[str, int] = Counter()
-        self.term_freqs: list[dict[str, int]] = []
-        
-        for tokens in self.doc_tokens:
-            tf = Counter(tokens)
-            self.term_freqs.append(tf)
-            for term in tf:
-                self.doc_freqs[term] += 1
-    
-    @staticmethod
-    def _tokenize(text: str) -> list[str]:
-        """Simple lowercase word tokenizer."""
-        return re.findall(r'\b[a-z0-9]+\b', text.lower())
-    
-    def _idf(self, term: str) -> float:
-        """Inverse document frequency with smoothing."""
-        df = self.doc_freqs.get(term, 0)
-        return math.log((self.n_docs - df + 0.5) / (df + 0.5) + 1)
-    
-    def score(self, query: str, doc_idx: int) -> float:
-        """Score a single document against a query."""
-        query_tokens = self._tokenize(query)
-        doc_tf = self.term_freqs[doc_idx]
-        doc_len = self.doc_lengths[doc_idx]
-        
-        score = 0.0
-        for term in query_tokens:
-            if term not in doc_tf:
-                continue
-            
-            tf = doc_tf[term]
-            idf = self._idf(term)
-            
-            numerator = tf * (self.k1 + 1)
-            denominator = tf + self.k1 * (1 - self.b + self.b * (doc_len / self.avg_doc_length))
-            score += idf * (numerator / denominator)
-        
-        return score
-
-
-@dataclass
-class QueryAnalysis:
-    """Analysis of search query to determine optimal search strategy."""
-    original_query: str
-    is_likely_author_search: bool = False
-    is_likely_exact_phrase: bool = False
-    is_likely_concept_search: bool = False
-
-
-def analyze_query(query: str) -> QueryAnalysis:
-    """Detect query type to adjust search weights."""
-    analysis = QueryAnalysis(original_query=query)
-    query_terms = re.findall(r'\b[a-z0-9]+\b', query.lower())
-    
-    concept_indicators = {
-        'theory', 'effect', 'model', 'analysis', 'research', 'study',
-        'reasoning', 'bias', 'cognition', 'political', 'social', 'media',
-        'communication', 'psychology', 'behavior', 'perception', 'attitude',
-        'motivated', 'selective', 'exposure', 'processing', 'information',
-        'deliberation', 'discourse', 'polarization', 'persuasion'
-    }
-    
-    words = query.split()
-    
-    # Check if it looks like a name (1-4 capitalized words, no concept terms)
-    if 1 <= len(words) <= 4:
-        all_capitalized = all(w[0].isupper() for w in words if w)
-        no_concept_words = not any(w.lower() in concept_indicators for w in words)
-        
-        if all_capitalized and no_concept_words:
-            analysis.is_likely_author_search = True
-    
-    if '"' in query or "'" in query:
-        analysis.is_likely_exact_phrase = True
-    
-    if any(term in concept_indicators for term in query_terms):
-        analysis.is_likely_concept_search = True
-    
-    return analysis
-
-
-def _normalize_text(text: str) -> str:
-    """Normalize text for matching."""
-    return re.sub(r'[^a-z0-9\s]', '', text.lower()).strip()
-
-
-def author_match_score(query: str, authors_field: str) -> float:
-    """Check if query matches author names. Returns 0-1 score."""
-    if not authors_field:
-        return 0.0
-    
-    query_norm = _normalize_text(query)
-    authors_norm = _normalize_text(authors_field)
-    
-    if query_norm in authors_norm:
-        return 1.0
-    
-    query_parts = query_norm.split()
-    authors_parts = authors_norm.split()
-    
-    matched_parts = sum(1 for qp in query_parts if any(qp in ap or ap in qp for ap in authors_parts))
-    if query_parts and matched_parts > 0:
-        return matched_parts / len(query_parts)
-    
-    return 0.0
-
-
-def title_match_score(query: str, title_field: str) -> float:
-    """Check if query terms appear in title. Returns 0-1 score."""
-    if not title_field:
-        return 0.0
-    
-    query_norm = _normalize_text(query)
-    title_norm = _normalize_text(title_field)
-    
-    if query_norm in title_norm:
-        return 1.0
-    
-    query_words = set(query_norm.split())
-    title_words = set(title_norm.split())
-    
-    if not query_words:
-        return 0.0
-    
-    overlap = query_words & title_words
-    return len(overlap) / len(query_words)
-
-
-def hybrid_search(
-    collection,
-    query_embedding: list[float],
-    query: str,
-    top_k: int = 10,
-    initial_k: int = 50,
-) -> dict:
-    """
-    Perform hybrid search combining semantic + BM25 + metadata matching.
-    
-    Returns dict matching ChromaDB format: {documents, metadatas, distances}
-    """
-    analysis = analyze_query(query)
-    
-    # Adjust weights based on query type
-    if analysis.is_likely_author_search:
-        semantic_weight = 0.3
-        bm25_weight = 0.2
-        metadata_weight = 0.5
-    elif analysis.is_likely_exact_phrase:
-        semantic_weight = 0.3
-        bm25_weight = 0.5
-        metadata_weight = 0.2
-    else:
-        semantic_weight = 0.5
-        bm25_weight = 0.3
-        metadata_weight = 0.2
-    
-    # Boost multipliers
-    author_boost = 2.0
-    title_boost = 1.5
-    exact_phrase_boost = 1.5
-    
-    # Fetch more results than needed for re-ranking
-    try:
-        fetch_k = min(initial_k, collection.count())
-    except Exception:
-        fetch_k = initial_k
-    
-    semantic_results = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=fetch_k,
-        include=['documents', 'metadatas', 'distances'],
-    )
-    
-    sem_docs = semantic_results.get('documents', [[]])[0]
-    sem_metas = semantic_results.get('metadatas', [[]])[0]
-    sem_dists = semantic_results.get('distances', [[]])[0]
-    
-    if not sem_docs:
-        return semantic_results
-    
-    # Build BM25 index over fetched documents
-    bm25 = BM25(sem_docs)
-    
-    # Score each result
-    scored_results = []
-    
-    for i, (doc, meta, dist) in enumerate(zip(sem_docs, sem_metas, sem_dists)):
-        meta = meta or {}
-        
-        # Semantic score (convert distance to similarity)
-        semantic_score = 1.0 / (1.0 + dist)
-        
-        # BM25 score
-        bm25_score = bm25.score(query, i)
-        
-        # Metadata scores
-        authors = meta.get('authors', '') or meta.get('paper_authors', '') or ''
-        title = meta.get('title', '') or meta.get('paper_title', '') or ''
-        
-        author_score = author_match_score(query, authors)
-        title_score = title_match_score(query, title)
-        
-        # Exact phrase in document
-        exact_match = 1.0 if query.lower() in doc.lower() else 0.0
-        
-        scored_results.append({
-            'doc': doc,
-            'meta': meta,
-            'dist': dist,
-            'semantic': semantic_score,
-            'bm25': bm25_score,
-            'author': author_score,
-            'title': title_score,
-            'exact': exact_match,
-        })
-    
-    # Normalize BM25 scores
-    bm25_scores = [r['bm25'] for r in scored_results]
-    if any(s > 0 for s in bm25_scores):
-        min_s, max_s = min(bm25_scores), max(bm25_scores)
-        if max_s > min_s:
-            for r in scored_results:
-                r['bm25'] = (r['bm25'] - min_s) / (max_s - min_s)
-    
-    # Compute final scores
-    for r in scored_results:
-        base_score = (
-            semantic_weight * r['semantic'] +
-            bm25_weight * r['bm25'] +
-            metadata_weight * max(r['author'], r['title'])
-        )
-        
-        boost = 1.0
-        if r['author'] > 0.5:
-            boost *= author_boost * (1.5 if analysis.is_likely_author_search else 1.0)
-        if r['title'] > 0.3:
-            boost *= title_boost
-        if r['exact'] > 0:
-            boost *= exact_phrase_boost
-        
-        r['final_score'] = base_score * boost
-    
-    # Sort by final score
-    scored_results.sort(key=lambda r: r['final_score'], reverse=True)
-    
-    # Take top_k and convert back to ChromaDB format
-    top_results = scored_results[:top_k]
-    
-    return {
-        'documents': [[r['doc'] for r in top_results]],
-        'metadatas': [[r['meta'] for r in top_results]],
-        'distances': [[r['dist'] for r in top_results]],
-    }
-
-
-# ============================================================================
-# CONFIG HELPERS
-# ============================================================================
-
+# ---------- Config helpers ----------
 def load_config() -> dict:
     here = Path(__file__).resolve().parent.parent
     cfg_path = here / "config.yaml"
@@ -411,23 +120,15 @@ def embed_query(client: OpenAI, text: str, model: str) -> list[float]:
     return resp.data[0].embedding
 
 
-def run_query(col, q_emb: list[float], query_text: str, top_k: int) -> dict:
-    """
-    Run hybrid search on a collection.
-    
-    Args:
-        col: ChromaDB collection
-        q_emb: Query embedding vector
-        query_text: Original query string (needed for BM25/metadata matching)
-        top_k: Number of results to return
-    """
-    return hybrid_search(col, q_emb, query_text, top_k=top_k)
+def run_query(col, q_emb: list[float], top_k: int) -> dict:
+    return col.query(
+        query_embeddings=[q_emb],
+        n_results=top_k,
+        include=["documents", "metadatas", "distances"],
+    )
 
 
-# ============================================================================
-# THEME PERSISTENCE HELPERS
-# ============================================================================
-
+# ---------- Theme persistence helpers ----------
 def _init_theme_from_query_params(default: str = "light") -> None:
     try:
         qp = st.query_params
@@ -448,10 +149,7 @@ def _persist_theme_to_query_params(theme: str) -> None:
         pass
 
 
-# ============================================================================
-# AI QUERY-FOCUSED SUMMARY HELPERS
-# ============================================================================
-
+# ---------- AI query-focused summary helpers ----------
 def _hash_text(s: str) -> str:
     return hashlib.sha256((s or "").encode("utf-8")).hexdigest()[:16]
 
@@ -557,10 +255,7 @@ DOCUMENT TEXT:
         return (chat.choices[0].message.content or "").strip()
 
 
-# ============================================================================
-# UI HELPERS
-# ============================================================================
-
+# ---------- UI helpers ----------
 def inject_css(mode: str) -> None:
     if mode == "dark":
         bg = "#0f111a"
@@ -844,10 +539,7 @@ def render_results(
                     st.markdown(meta_html2, unsafe_allow_html=True)
 
 
-# ============================================================================
-# APP
-# ============================================================================
-
+# ---------- App ----------
 def main():
     st.set_page_config(
         page_title="Pensieve",
@@ -990,7 +682,7 @@ def main():
         q_emb = embed_query(oa, q, model=embed_model)
 
         if use_notes:
-            res_notes = run_query(notes, q_emb, q, int(top_k_ui))
+            res_notes = run_query(notes, q_emb, int(top_k_ui))
             note_doc_ids = [
                 (m or {}).get("doc_id")
                 for m in res_notes["metadatas"][0]
@@ -1010,7 +702,7 @@ def main():
             if papers is None:
                 st.warning("No 'papers_docs' collection found yet.")
             else:
-                res_papers = run_query(papers, q_emb, q, int(top_k_ui))
+                res_papers = run_query(papers, q_emb, int(top_k_ui))
                 paper_source_files = [
                     (m or {}).get("source_file")
                     for m in res_papers["metadatas"][0]
