@@ -588,7 +588,7 @@ def main():
 
     github_url = (cfg.get("app", {}) or {}).get("github_url", "").strip()
     if not github_url:
-        github_url = "https://github.com/ramirza1/pensieve"
+        github_url = "https://github.com/ramirza1/pensieve-project-template"
 
     # ---------- HERO ----------
     left, right = st.columns([2.1, 1.4], gap="large")
