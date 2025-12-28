@@ -44,7 +44,7 @@ def ensure_chroma_db_from_b2() -> Path:
         b2_key_id = st.secrets["B2_KEY_ID"]
         b2_app_key = st.secrets["B2_APP_KEY"]
         b2_bucket = st.secrets.get("B2_BUCKET_NAME", "pensieve-db")
-        b2_prefix = st.secrets.get("B2_PREFIX", "chroma_db/")  # folder in bucket
+        b2_prefix = st.secrets.get("B2_PREFIX", "chroma_db/")
     except Exception as e:
         st.error(f"B2 credentials not configured: {e}")
         st.info("For local development, ensure data/_server/chroma_db/ exists with your indexed data.")
@@ -82,7 +82,7 @@ def ensure_chroma_db_from_b2() -> Path:
 
             local_rel = file_name[len(b2_prefix):]
             if not local_rel:
-                continue  # skip the folder itself
+                continue
 
             local_path = chroma_dir / local_rel
             local_path.parent.mkdir(parents=True, exist_ok=True)
@@ -105,6 +105,7 @@ def ensure_chroma_db_from_b2() -> Path:
         st.stop()
 
     return chroma_dir
+
 
 # ---------- Config helpers ----------
 def load_config() -> dict:
@@ -412,7 +413,6 @@ def render_results(
     query: str,
     ai_model: str,
     summaries: dict[str, str] | None = None,
-    debug: bool = False,
     enable_ai_snippets: bool = False,
 ):
     docs = res["documents"][0]
@@ -429,7 +429,6 @@ def render_results(
         filename = parts[-1] if parts else src
         folder = " / ".join(parts[:-1]) if len(parts) > 1 else ""
         source_type = (meta.get("source_type") or "").strip()
-        chunk_ix = meta.get("chunk_index")
         heading_path = (meta.get("heading_path") or "").strip()
         theme = (meta.get("theme") or "").strip()
         paper_title = (meta.get("paper_title") or "").strip()
@@ -450,11 +449,6 @@ def render_results(
         exp_title = f"[{i}] {display}"
         if page_str:
             exp_title += f" • {page_str}"
-        if debug:
-            if chunk_ix is not None:
-                exp_title += f" • chunk={chunk_ix} • d={dist:.3f}"
-            else:
-                exp_title += f" • d={dist:.3f}"
 
         if label == "NOTES":
             key = (meta.get("doc_id") or "").strip()
@@ -498,8 +492,6 @@ def render_results(
                 render_summary_text(summary_text)
             else:
                 st.markdown("_No summary found for this item yet._")
-                if debug and key:
-                    st.code(f"Expected summary id: {key}::summary")
 
             if enable_ai_snippets and query and doc_text:
                 st.markdown("<div class='pensieve-divider'></div>", unsafe_allow_html=True)
@@ -525,13 +517,9 @@ def render_results(
                             doc_text=doc_text_capped,
                         )
                     st.markdown(snippet if snippet else "_No output returned._")
-                    if debug:
-                        with st.expander("Debug: snippet cache key", expanded=False):
-                            st.code(ck)
-            elif debug:
-                st.markdown("_AI snippets disabled (toggle ✨ AI snippets in the top controls)._")
 
-            show_meta = (label == "PAPERS") or bool(heading_path) or debug
+            # Show metadata expander for papers or when heading path exists
+            show_meta = (label == "PAPERS") or bool(heading_path)
             if show_meta:
                 st.markdown("<div class='pensieve-divider'></div>", unsafe_allow_html=True)
                 with st.expander("Metadata", expanded=False):
@@ -544,16 +532,11 @@ def render_results(
                         + _kv("Authors", meta.get("authors") or meta.get("paper_authors") or "")
                         + _kv("Year", meta.get("year") or meta.get("paper_year") or "")
                         + _kv("Doc ID", (meta.get("doc_id") or "").strip())
-                        + _kv("Chunk index", str(chunk_ix) if chunk_ix is not None else "")
-                        + _kv("Page", str(page) if page else "")
                         + "</div>"
                     )
                     if meta_html2 == "<div class='pensieve-meta'></div>":
                         meta_html2 = "<div class='pensieve-meta muted'>No extra metadata available.</div>"
                     st.markdown(meta_html2, unsafe_allow_html=True)
-                    if debug:
-                        st.markdown("**Raw meta**")
-                        st.json(meta)
 
 
 # ---------- App ----------
@@ -568,7 +551,7 @@ def main():
     inject_css(st.session_state.get("theme_mode", "light"))
 
     load_dotenv()
-    
+
     # Get API key from env or Streamlit secrets
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -576,18 +559,16 @@ def main():
             api_key = st.secrets.get("OPENAI_API_KEY")
         except Exception:
             pass
-    
+
     if not api_key:
         st.error("Missing OPENAI_API_KEY")
         st.stop()
 
     cfg = load_config()
-#    allow_debug = bool((cfg.get("app", {}) or {}).get("allow_debug", False))
     repo = Path(__file__).resolve().parent.parent
 
-    # ===== Fetch DB from B2 if needed =====
+    # Fetch DB from B2 if needed
     chroma_dir = ensure_chroma_db_from_b2()
-    # ======================================
 
     top_k_default = int(cfg["retrieval"].get("top_k", 8))
     embed_model = cfg.get("embedding_model", "text-embedding-3-small")
@@ -613,7 +594,7 @@ def main():
     left, right = st.columns([2.1, 1.4], gap="large")
 
     with left:
-        h1, toggles = st.columns([4, 1.25], vertical_alignment="center")
+        h1, toggle_col = st.columns([4, 1], vertical_alignment="center")
         with h1:
             st.markdown(
                 """
@@ -621,21 +602,11 @@ def main():
                 """,
                 unsafe_allow_html=True,
             )
-        with toggles:
-#            c1, c2 = st.columns([1, 1], vertical_alignment="center") # Switch "comment out" to label below
-            c1 = st.container()
-            with c1:
-                if st.button("🌗", key="btn_theme", help="Toggle light/dark", use_container_width=True):
-                    st.session_state.theme_mode = "light" if st.session_state.theme_mode == "dark" else "dark"
-                    _persist_theme_to_query_params(st.session_state.theme_mode)
-                    st.rerun()
-#            with c2:
-#                if allow_debug:
-#                    debug = st.toggle("🐛", key="toggle_debug", value=False, help="Debug mode")
-#                else:
-#                    debug = False
-#                    # Keep layout stable when debug is hidden
-#                    st.markdown("<div style='height: 2.2rem;'></div>", unsafe_allow_html=True)
+        with toggle_col:
+            if st.button("🌗", key="btn_theme", help="Toggle light/dark", use_container_width=True):
+                st.session_state.theme_mode = "light" if st.session_state.theme_mode == "dark" else "dark"
+                _persist_theme_to_query_params(st.session_state.theme_mode)
+                st.rerun()
 
         st.markdown(
             """
@@ -657,7 +628,6 @@ def main():
             """,
             unsafe_allow_html=True,
         )
-
         st.markdown(
             """
             <div class="muted" style="font-size: 0.98em; line-height: 1.4; margin-top: 0.15em;">
@@ -707,9 +677,6 @@ def main():
             help="Generate query-focused insights per result",
         )
 
-#    if debug:
-#        st.caption(f"debug: chroma_dir={chroma_dir}")
-
     # ---------- QUERY ----------
     if q:
         q_emb = embed_query(oa, q, model=embed_model)
@@ -728,7 +695,6 @@ def main():
                 query=q,
                 ai_model=ai_model,
                 summaries=note_sum_map,
-#                debug=debug,
                 enable_ai_snippets=enable_ai_snippets,
             )
 
@@ -749,7 +715,6 @@ def main():
                     query=q,
                     ai_model=ai_model,
                     summaries=paper_sum_map,
-#                    debug=debug,
                     enable_ai_snippets=enable_ai_snippets,
                 )
 

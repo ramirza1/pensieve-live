@@ -7,7 +7,5 @@ retrieval:
 app:
   github_url: "https://github.com/ramirza1/pensieve-project-template"
   query_snippet_model: "gpt-4.1-mini"
-#  allow_debug: false
-
 
 embedding_model: "text-embedding-3-small"
