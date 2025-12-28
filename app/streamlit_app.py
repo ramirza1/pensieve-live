@@ -658,6 +658,18 @@ def main():
             unsafe_allow_html=True,
         )
 
+        st.markdown(
+            """
+            <div class="muted" style="font-size: 0.98em; line-height: 1.4; margin-top: 0.15em;">
+            🌐 See more of my work at
+            <a href="https://rehanmirza.net/" target="_blank" rel="noopener noreferrer">
+                rehanmirza.net
+            </a>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
     with right:
         img_path = repo / "assets" / "pensieve.jpg"
         if img_path.exists():
