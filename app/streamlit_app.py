@@ -16,14 +16,27 @@ import chromadb
 # ---------- B2 Download Helper ----------
 @st.cache_resource(show_spinner=False)
 def ensure_chroma_db_from_b2() -> Path:
+    """
+    Ensure ChromaDB exists locally.
+    - If already present and non-empty, use it.
+    - Otherwise download it from Backblaze B2 into data/_server/chroma_db.
+
+    Force refresh:
+    - Set Streamlit secret FORCE_B2_DOWNLOAD="true" (or env var) to redownload.
+    """
     repo = Path(__file__).resolve().parent.parent
     chroma_dir = repo / "data" / "_server" / "chroma_db"
     marker_file = chroma_dir / ".b2_downloaded"
 
-    # Use existing DB if present
-    if marker_file.exists() and chroma_dir.exists() and any(chroma_dir.iterdir()):
-        return chroma_dir
-    if chroma_dir.exists() and any(chroma_dir.iterdir()):
+    # Force refresh toggle (Streamlit secrets preferred; env var fallback)
+    force_download = False
+    try:
+        force_download = str(st.secrets.get("FORCE_B2_DOWNLOAD", "false")).strip().lower() == "true"
+    except Exception:
+        force_download = str(os.getenv("FORCE_B2_DOWNLOAD", "false")).strip().lower() == "true"
+
+    # Use existing DB if present (unless forced)
+    if not force_download and chroma_dir.exists() and any(chroma_dir.iterdir()):
         return chroma_dir
 
     # Get B2 credentials from Streamlit secrets
@@ -31,13 +44,15 @@ def ensure_chroma_db_from_b2() -> Path:
         b2_key_id = st.secrets["B2_KEY_ID"]
         b2_app_key = st.secrets["B2_APP_KEY"]
         b2_bucket = st.secrets.get("B2_BUCKET_NAME", "pensieve-db")
+        b2_prefix = st.secrets.get("B2_PREFIX", "chroma_db/")  # folder in bucket
     except Exception as e:
         st.error(f"B2 credentials not configured: {e}")
         st.info("For local development, ensure data/_server/chroma_db/ exists with your indexed data.")
         st.stop()
 
     progress_placeholder = st.empty()
-    progress_placeholder.info("🧠 Loading Pensieve database (first load takes ~30-60 seconds)...")
+    msg = "🧠 Refreshing Pensieve database from B2..." if force_download else "🧠 Loading Pensieve database (first load takes ~30-60 seconds)..."
+    progress_placeholder.info(msg)
 
     try:
         from b2sdk.v2 import B2Api, InMemoryAccountInfo
@@ -45,7 +60,6 @@ def ensure_chroma_db_from_b2() -> Path:
         info = InMemoryAccountInfo()
         b2_api = B2Api(info)
         b2_api.authorize_account("production", b2_key_id, b2_app_key)
-
         bucket = b2_api.get_bucket_by_name(b2_bucket)
 
         # Clear and recreate chroma dir
@@ -53,14 +67,22 @@ def ensure_chroma_db_from_b2() -> Path:
             shutil.rmtree(chroma_dir)
         chroma_dir.mkdir(parents=True, exist_ok=True)
 
+        # Normalize prefix
+        if b2_prefix and not b2_prefix.endswith("/"):
+            b2_prefix = b2_prefix + "/"
+
         file_count = 0
-        for file_version, _ in bucket.ls(folder_to_list="chroma_db/", recursive=True):
+
+        # Download all files under prefix
+        for file_version, _ in bucket.ls(folder_to_list=b2_prefix, recursive=True):
             file_name = file_version.file_name
-            if not file_name.startswith("chroma_db/"):
+
+            if not file_name.startswith(b2_prefix):
                 continue
-            local_rel = file_name[len("chroma_db/"):]
+
+            local_rel = file_name[len(b2_prefix):]
             if not local_rel:
-                continue
+                continue  # skip the folder itself
 
             local_path = chroma_dir / local_rel
             local_path.parent.mkdir(parents=True, exist_ok=True)
@@ -68,12 +90,15 @@ def ensure_chroma_db_from_b2() -> Path:
             file_count += 1
 
         # Sanity check after download
-        if not chroma_dir.exists() or not any(chroma_dir.iterdir()):
+        if not any(chroma_dir.iterdir()):
             progress_placeholder.error(f"Chroma dir is empty after download: {chroma_dir}")
             st.stop()
 
         marker_file.touch()
-        progress_placeholder.success(f"✅ Database loaded ({file_count} files)")
+        if force_download:
+            progress_placeholder.success(f"✅ Database refreshed ({file_count} files)")
+        else:
+            progress_placeholder.success(f"✅ Database loaded ({file_count} files)")
 
     except Exception as e:
         progress_placeholder.error(f"Failed to download database: {e}")
