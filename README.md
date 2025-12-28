@@ -1,20 +1,16 @@
-﻿# 🧠 Pensieve
+﻿🧠 Pensieve
 
-A semantic search tool for academic papers and research notes, powered by ChromaDB and OpenAI embeddings.
-
+A hybrid semantic search tool for academic papers and research notes, powered by ChromaDB and OpenAI embeddings.
 Just like Dumbledore stored memories in the Pensieve, this tool helps retrieve knowledge from notes and readings, making your research instantly searchable and intelligently summarized.
+Live App: [https://pensieve.rehanmirza.net]
 
-**Live App:** [https://pensieve.rehanmirza.net]
+✨ Features
 
----
-
-## ✨ Features
-
-- **Semantic Search**: Find relevant content across all your notes and papers using natural language queries
-- **Auto-Summarization**: LLM-generated summaries for each paper and note section
-- **AI Query Snippets**: On-demand, query-focused insights that explain how each result relates to your search
-- **Incremental Indexing**: Only processes new or changed files — fast weekly updates
-- **Cloud Sync**: Automatically deploys to Streamlit Cloud via Backblaze B2
+Hybrid Search: Find relevant content using semantic similarity, keyword matching (BM25), and metadata boosting — author name searches and specific concepts rank higher
+Auto-Summarization: LLM-generated summaries for each paper and note section
+AI Query Snippets: On-demand, query-focused insights that explain how each result relates to your search
+Incremental Indexing: Only processes new or changed files — fast weekly updates
+Cloud Sync: Automatically deploys to Streamlit Cloud via Backblaze B2
 
 ---
 
