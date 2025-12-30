@@ -1,19 +1,32 @@
-﻿name: Streamlit keepalive ping
+﻿name: Streamlit keepalive ping (disabled by default)
 
 on:
-  schedule:
-    # Every 12 hours (00:12 and 12:12 UTC)
-    - cron: "12 0 * * *"
-    - cron: "12 12 * * *"
   workflow_dispatch: {}
 
 jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping Streamlit app
+      - name: Ping Streamlit app (best effort)
+        shell: bash
         run: |
-          set -e
+          set +e
           APP_URL="https://pensieve-live.streamlit.app/"
-          # Follow redirects; retry a few times; fail if non-2xx
-          curl -L --retry 3 --retry-delay 5 --fail --max-time 30 "" > /dev/null
+
+          echo "Pinging: $APP_URL"
+          code=$(curl -L -sS -o /dev/null -w "%{http_code}" --max-time 30 "$APP_URL")
+          rc=$?
+
+          echo "curl exit code: $rc"
+          echo "http status: $code"
+
+          if [ "$rc" -ne 0 ]; then
+            echo "::warning::curl failed (exit $rc). Streamlit may be asleep."
+            exit 0
+          fi
+
+          if [ "$code" -ge 400 ]; then
+            echo "::warning::Received HTTP $code from Streamlit."
+          fi
+
+          exit 0
