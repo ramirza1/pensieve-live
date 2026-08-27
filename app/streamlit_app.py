@@ -898,6 +898,38 @@ def main():
     ai_model = ((cfg.get("app", {}) or {}).get("query_snippet_model") or "gpt-4.1-mini").strip()
 
     oa = OpenAI(api_key=api_key)
+
+        # ---- TEMPORARY DIAGNOSTIC ----
+    import chromadb as _cdb
+    import sqlite3
+
+    st.write("**ChromaDB version:**", _cdb.__version__)
+    st.write("**chroma_dir:**", str(chroma_dir))
+    st.write("**dir exists:**", chroma_dir.exists())
+
+    if chroma_dir.exists():
+        files = sorted(p.name for p in chroma_dir.iterdir())
+        st.write("**top-level contents:**", files)
+        db_path = chroma_dir / "chroma.sqlite3"
+        st.write("**chroma.sqlite3 exists:**", db_path.exists())
+        if db_path.exists():
+            st.write("**sqlite3 size (MB):**", round(db_path.stat().st_size / 1e6, 2))
+            try:
+                con = sqlite3.connect(str(db_path))
+                tables = [r[0] for r in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+                ).fetchall()]
+                st.write("**tables:**", tables)
+                st.write("**has 'tenants' table:**", "tenants" in tables)
+                if "tenants" in tables:
+                    st.write("**tenants rows:**",
+                             con.execute("SELECT * FROM tenants").fetchall())
+                con.close()
+            except Exception as e:
+                st.write("**sqlite read error:**", repr(e))
+    st.stop()  # halt here so we can read the output
+    # ---- END DIAGNOSTIC ----
+
     chroma = chromadb.PersistentClient(path=str(chroma_dir))
 
     notes = chroma.get_or_create_collection(name="notes_docs")
