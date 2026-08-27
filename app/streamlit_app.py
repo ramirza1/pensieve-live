@@ -42,9 +42,24 @@ def ensure_chroma_db_from_b2() -> Path:
     except Exception:
         force_download = str(os.getenv("FORCE_B2_DOWNLOAD", "false")).strip().lower() == "true"
 
-    # Use existing DB if present (unless forced)
+    # Use existing DB if present (unless forced) — but validate schema first
     if not force_download and chroma_dir.exists() and any(chroma_dir.iterdir()):
-        return chroma_dir
+        import sqlite3
+        db_path = chroma_dir / "chroma.sqlite3"
+        schema_ok = False
+        if db_path.exists():
+            try:
+                con = sqlite3.connect(str(db_path))
+                con.execute("SELECT * FROM tenants LIMIT 1")
+                con.close()
+                schema_ok = True
+            except sqlite3.OperationalError:
+                con.close()
+                st.warning("⚠️ Existing ChromaDB has old schema (pre-1.x). Re-downloading from B2...")
+        if schema_ok:
+            return chroma_dir
+        # Fall through to re-download if schema is bad
+        shutil.rmtree(chroma_dir)
 
     # Get B2 credentials from Streamlit secrets
     try:
