@@ -927,7 +927,27 @@ def main():
                 con.close()
             except Exception as e:
                 st.write("**sqlite read error:**", repr(e))
-    st.stop()  # halt here so we can read the output
+        st.write("---")
+    st.write("**Attempting PersistentClient with full traceback:**")
+    import traceback
+    try:
+        _client = chromadb.PersistentClient(path=str(chroma_dir))
+        st.write("✅ client OK")
+        st.write("tenants via client:", _client.list_collections())
+    except Exception as e:
+        st.error(f"{type(e).__name__}: {e}")
+        st.code(traceback.format_exc())
+
+    # also surface the native deps
+    try:
+        import chroma_hnswlib
+        st.write("chroma_hnswlib import: OK")
+    except Exception as e:
+        st.write("chroma_hnswlib import FAILED:", repr(e))
+
+    st.stop() 
+
+    # halt here so we can read the output
     # ---- END DIAGNOSTIC ----
 
     chroma = chromadb.PersistentClient(path=str(chroma_dir))
